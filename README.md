@@ -1,6 +1,6 @@
 # Vaio Panel
 
-基于 `vless-server.sh` 的自托管多服务器管理平台。主服务器运行面板，节点安装 Python Agent 并主动通过 HTTPS 上线。
+基于 `vless` 的自托管多服务器管理平台。主服务器运行面板，节点安装 Python Agent 并主动通过 HTTPS 上线。
 
 **v0.1.0 首版 / 预览版本。** 已提供可运行代码和离线回归测试；真实 VPS、systemd/OpenRC 及代理客户端连通性仍需部署验收。不要把通过模拟测试等同于已经通过真实服务器验证。
 
@@ -89,4 +89,4 @@ GitHub Actions 在 Python 3.9/3.12 执行回归，并构建容器镜像。真实
 
 ## 源码与 Git
 
-`vendor/vless-server.sh` 固定为原项目 3.7.2 快照，保留原作者信息和 SHA-256。参见 [来源记录](vendor/README.md)。面板代码和节点代码独立管理，后续功能在 `codex/*` 分支开发，通过测试后提交。
+`vendor/vless-server.sh` 固定为原项目 3.7.2 快照，
