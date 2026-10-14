@@ -66,6 +66,12 @@ class Check(unittest.TestCase):
             updates.check(db, '1.1.0', now=1000 + updates.CACHE + updates.RETRY + 2, fetch=fetch)
             self.assertEqual(len(calls), 2)
             self.assertFalse(updates.check(db, '9.0.0', now=1000 + updates.CACHE + updates.RETRY + 3, fetch=fetch)['newer'])
+            # Opening the dialog re-checks at once, but not more than once a minute.
+            start = 1000 + updates.CACHE + updates.RETRY + 2
+            updates.check(db, '1.1.0', now=start + 30, fetch=fetch, force=True)
+            self.assertEqual(len(calls), 2)
+            r = updates.check(db, '1.1.0', now=start + updates.FORCED + 1, fetch=lambda: 'v9.1.0', force=True)
+            self.assertEqual(r['latest'], 'v9.1.0')
             self.assertFalse(updates.check(db, '9.1.0', now=1000 + updates.CACHE + updates.RETRY + 3, fetch=fetch)['newer'])
 
 
@@ -73,7 +79,8 @@ class API(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.dir = Path(self.tmp.name)
-        self.app = create_app({'TESTING': True, 'DATABASE': str(self.dir / 'panel.sqlite'), 'PUBLIC_URL': 'https://p.example.com', 'UPDATE_HELPER': True})
+        self.app = create_app({'TESTING': True, 'DATABASE': str(self.dir / 'panel.sqlite'), 'PUBLIC_URL': 'https://p.example.com', 'UPDATE_HELPER': True,
+                               'SYSTEMD_DIR': str(self.dir / 'units')})
         self.store = self.app.extensions['store']
         with self.store.connect() as db:
             db.execute("INSERT OR REPLACE INTO settings VALUES('password',?)", (generate_password_hash('a-long-test-password', method='pbkdf2:sha256:1000'),))
@@ -112,6 +119,16 @@ class API(unittest.TestCase):
         with self.store.connect() as db:
             self.assertTrue(db.execute("SELECT 1 FROM audit WHERE event='panel.update_requested'").fetchone())
 
+    def test_refresh_bypasses_the_cache(self):
+        with self.store.connect() as db:
+            db.execute("INSERT OR REPLACE INTO settings VALUES('update_check',?)", (json.dumps({'at': time.time() - 120, 'ok': True, 'latest': 'v' + __version__}),))
+        with patch.object(updates, 'fetch_latest', return_value=self.latest) as fetch:
+            self.assertFalse(self.client.get('/api/panel-update').json['newer'])          # badge: cached answer
+            fetch.assert_not_called()
+            r = self.client.get('/api/panel-update?refresh=1').json                         # dialog: asks GitHub
+            self.assertEqual((r['latest'], r['newer']), (self.latest, True))
+            fetch.assert_called_once()
+
     def test_no_update_when_current(self):
         self.cache('v' + __version__ if updates.version_key(__version__) else None)
         self.assertFalse(self.client.get('/api/panel-update').json['newer'])
@@ -119,7 +136,8 @@ class API(unittest.TestCase):
         self.assertFalse((self.dir / 'panel-update-request.json').exists())
 
     def test_missing_update_helper_is_installed_through_address_helper(self):
-        app = create_app({'TESTING': True, 'DATABASE': str(self.dir / 'panel.sqlite'), 'PUBLIC_URL': 'https://p.example.com', 'ADDRESS_HELPER': True})
+        app = create_app({'TESTING': True, 'DATABASE': str(self.dir / 'panel.sqlite'), 'PUBLIC_URL': 'https://p.example.com', 'ADDRESS_HELPER': True,
+                          'SYSTEMD_DIR': str(self.dir / 'units')})
         client = app.test_client()
         client.post('/api/login', json={'username': 'admin', 'password': 'a-long-test-password'})
         self.cache(self.latest)
@@ -129,6 +147,13 @@ class API(unittest.TestCase):
         (self.dir / 'address-request.json').write_text('{"action": "set_domain"}')     # never overwrites a pending address change
         client.get('/api/panel-update')
         self.assertIn('set_domain', (self.dir / 'address-request.json').read_text())
+        # Once the units exist (as on a real panel) nothing is requested.
+        (self.dir / 'units').mkdir()
+        (self.dir / 'units/vaio-panel-update.path').write_text('')
+        (self.dir / 'address-request.json').unlink()
+        r = client.get('/api/panel-update').json
+        self.assertEqual((r['helper'], r['installing']), (True, False))
+        self.assertFalse((self.dir / 'address-request.json').exists())
         self.assertFalse(self.client.get('/api/panel-update').json['installing'])     # helper present
 
     def test_needs_admin(self):

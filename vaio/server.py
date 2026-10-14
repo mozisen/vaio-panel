@@ -72,6 +72,7 @@ def create_app(config=None):
     store = Store(app.config["DATABASE"])
     app.extensions["store"] = store
     data_dir = Path(app.config["DATABASE"]).resolve().parent
+    units = Path(app.config.get("SYSTEMD_DIR", "/etc/systemd/system"))   # root helper units; tests point elsewhere
     with store.connect() as db:
         # The panel came up on a different address than last time (domain bound or changed): tell every node once.
         # First start (fresh install or upgrade from 1.0.0) only records the address the nodes already use.
@@ -980,7 +981,7 @@ def create_app(config=None):
         with store.connect() as db:
             migration = address_migration(db) if url.scheme == "https" else None
         return jsonify(url=app.config["PUBLIC_URL"], secure=url.scheme == "https", legacy_open=allow_http and url.scheme == "https",
-                       helper=Path("/etc/systemd/system/vaio-panel-address.path").exists() or app.config.get("ADDRESS_HELPER", False),
+                       helper=(units / "vaio-panel-address.path").exists() or app.config.get("ADDRESS_HELPER", False),
                        pending=request_file.exists(), status=status, migration=migration)
 
     def address_request(payload):
@@ -1036,14 +1037,14 @@ def create_app(config=None):
         from . import updates
         with store.connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            result = updates.check(db, __version__)
+            result = updates.check(db, __version__, force=request.args.get("refresh") == "1")
         try:
             status = json.loads((data_dir / "panel-update-status.json").read_text())
         except (OSError, ValueError):
             status = None
-        helper = Path("/etc/systemd/system/vaio-panel-update.path").exists() or app.config.get("UPDATE_HELPER", False)
+        helper = (units / "vaio-panel-update.path").exists() or app.config.get("UPDATE_HELPER", False)
         installing = False
-        if not helper and (Path("/etc/systemd/system/vaio-panel-address.path").exists() or app.config.get("ADDRESS_HELPER", False)):
+        if not helper and ((units / "vaio-panel-address.path").exists() or app.config.get("ADDRESS_HELPER", False)):
             # Upgraded by a 1.1.0 updater: ask the root address helper (already running the new code) to add the update units.
             installing = True
             if not (data_dir / "address-request.json").exists():
